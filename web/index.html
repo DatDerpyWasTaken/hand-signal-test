@@ -13,10 +13,15 @@ h1{font-size:18px;margin:0 auto 0 0}
 button,input,select{font:inherit;min-height:44px;border-radius:8px;border:1px solid #2a323c;background:#161b22;color:var(--ink);padding:0 12px}
 button{background:var(--acc);color:#111;border:0;font-weight:700}
 button.sec{background:#161b22;color:var(--ink);border:1px solid #2a323c}
-#stage{position:relative;width:100%;aspect-ratio:3/4;max-height:70vh;background:#000;overflow:hidden}
-#stage>*{position:absolute;inset:0;width:100%;height:100%}
-video{object-fit:cover;opacity:.35;transform:scaleX(-1)}
+#stage{position:relative;width:100%;aspect-ratio:3/4;max-height:70vh;background:radial-gradient(ellipse at 50% 40%,#2a3340,#0b0e12 75%);overflow:hidden}
+#three{position:absolute;inset:0}
+#three canvas{width:100%!important;height:100%!important;display:block}
+#pip{position:absolute;top:10px;right:10px;width:30%;max-width:180px;aspect-ratio:3/4;border-radius:10px;overflow:hidden;border:2px solid #2a323c;background:#000;box-shadow:0 4px 14px #0008}
+#pip.big{width:auto;max-width:none;inset:0;border-radius:0;border:0;aspect-ratio:auto}
+#pip>*{position:absolute;inset:0;width:100%;height:100%}
+video{object-fit:cover;transform:scaleX(-1)}
 #overlay{transform:scaleX(-1)}
+#noHand{position:absolute;top:45%;left:0;right:0;text-align:center;color:var(--dim);pointer-events:none}
 #signal{position:absolute;inset:auto 0 12px 0;height:auto;text-align:center;font-size:clamp(24px,7vw,44px);font-weight:800;text-shadow:0 2px 8px #000;pointer-events:none}
 #status{padding:6px 12px;color:var(--dim);font-size:14px}
 details{padding:0 12px 12px}
@@ -32,12 +37,12 @@ textarea{width:100%;min-height:180px;font:13px/1.4 ui-monospace,monospace;backgr
   <h1>Hand Tracker</h1>
   <button id="start">Start camera</button>
   <button id="flip" class="sec">Flip camera</button>
-  <button id="view" class="sec">3D / camera</button>
+  <button id="view" class="sec">Camera: small</button>
 </header>
 <div id="stage">
-  <video id="video" playsinline muted></video>
-  <canvas id="overlay"></canvas>
   <div id="three"></div>
+  <div id="noHand">No hand in view</div>
+  <div id="pip"><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
   <div id="signal"></div>
 </div>
 <div id="status">Tap “Start camera”. First load downloads the tracking model (~8 MB).</div>
@@ -129,67 +134,120 @@ function stabilise(g, now) {
   return false;
 }
 
-// ---------- 3D virtual hand ----------
+// ---------- 3D virtual hand: flight glove, in its own centred display ----------
 const host = $("three");
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 host.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 100);
-camera.position.set(0, 0, 4.5);
-scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.2));
-const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(1, 2, 3); scene.add(sun);
+camera.position.set(0, 0.3, 6);
+scene.add(new THREE.HemisphereLight(0xdde6ff, 0x2a2418, 1.1));
+const key = new THREE.DirectionalLight(0xfff2e0, 1.6); key.position.set(2, 3, 4); scene.add(key);
+const rim = new THREE.DirectionalLight(0x9fc4ff, 1.2); rim.position.set(-3, 1, -4); scene.add(rim);
 
-function makeHand(color) {
+// Glove materials: sage Nomex back, tan leather fingertips, dark elastic cuff band
+const NOMEX = new THREE.MeshStandardMaterial({ color: 0x5c6046, roughness: .92 });
+const LEATHER = new THREE.MeshStandardMaterial({ color: 0x9a774b, roughness: .55 });
+const BAND = new THREE.MeshStandardMaterial({ color: 0x2b2d22, roughness: .8 });
+// radius per joint (scene units), thick like a padded glove
+const R = [.30, .16,.155,.145,.135, .14,.13,.12,.11, .145,.135,.125,.115, .135,.125,.115,.105, .12,.11,.10,.09];
+const TIPS = new Set([4, 8, 12, 16, 20]);
+const FINGER_BONES = CONN.filter(([a, b]) => b === a + 1 && a !== 0); // skip palm-edge bones, the solid palm covers them
+const DISTAL = new Set([3, 7, 11, 15, 19]);
+const RING = [0, 1, 2, 5, 9, 13, 17]; // palm outline
+
+function makeHand() {
   const g = new THREE.Group();
-  const skin = new THREE.MeshStandardMaterial({ color, roughness: .55 });
-  const joints = [...Array(21)].map((_, i) => {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(i === 0 ? .09 : .055, 16, 12), skin);
+  const joints = [];
+  for (let i = 1; i < 21; i++) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(R[i] * (TIPS.has(i) ? 1 : 1.04), 18, 14), TIPS.has(i) ? LEATHER : NOMEX);
+    g.add(m); joints[i] = m;
+  }
+  const bones = FINGER_BONES.map(([a, b]) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(R[b], R[a], 1, 18), DISTAL.has(a) ? LEATHER : NOMEX);
     g.add(m); return m;
   });
-  const bones = CONN.map(() => {
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, 1, 12), skin);
-    g.add(m); return m;
-  });
-  // palm fill
-  const palmGeo = new THREE.BufferGeometry();
-  palmGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(5 * 3 * 3), 3));
-  const palm = new THREE.Mesh(palmGeo, new THREE.MeshStandardMaterial({ color, roughness: .6, side: THREE.DoubleSide }));
+  // solid palm: two offset copies of the palm outline joined by side walls
+  const n = RING.length, geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array((n + 1) * 2 * 3), 3));
+  const idx = [];
+  for (let k = 0; k < n; k++) {
+    const k1 = (k + 1) % n, b = n + 1;
+    idx.push(n, k, k1, b + n, b + k1, b + k, k, b + k, k1, k1, b + k, b + k1);
+  }
+  geo.setIndex(idx);
+  const palm = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x5c6046, roughness: .92, side: THREE.DoubleSide }));
   g.add(palm);
+  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(.52, .42, 1.3, 24), NOMEX);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(.45, .45, .16, 24), BAND);
+  g.add(cuff, band);
   g.visible = false; scene.add(g);
-  return { g, joints, bones, palm };
+  return { g, joints, bones, palm, cuff, band, smooth: null };
 }
-const hands = [makeHand(0xf1c27d), makeHand(0xc68642)];
-const UP = new THREE.Vector3(0, 1, 0), tmp = new THREE.Vector3();
+const hands = [makeHand(), makeHand()];
+const UP = new THREE.Vector3(0, 1, 0), tmp = new THREE.Vector3(), V = () => new THREE.Vector3();
 const SCALE = 14;
 let mirror = true;
+
+function placeCyl(m, a, b) { // stretch a unit cylinder from a to b
+  tmp.subVectors(b, a);
+  m.position.copy(a).addScaledVector(tmp, .5);
+  m.scale.set(1, tmp.length(), 1);
+  m.quaternion.setFromUnitVectors(UP, tmp.normalize());
+}
 function poseHand(h, w, offsetX) {
-  const p = w.map(l => new THREE.Vector3((mirror ? -l.x : l.x) * SCALE + offsetX, -l.y * SCALE, -l.z * SCALE));
-  p.forEach((v, i) => h.joints[i].position.copy(v));
-  CONN.forEach(([a, b], i) => {
-    const m = h.bones[i];
-    tmp.subVectors(p[b], p[a]);
-    m.position.copy(p[a]).addScaledVector(tmp, .5);
-    m.scale.set(1, tmp.length(), 1);
-    m.quaternion.setFromUnitVectors(UP, tmp.normalize());
-  });
-  const tris = [[0,1,5],[0,5,9],[0,9,13],[0,13,17],[1,2,5]];
-  const arr = h.palm.geometry.attributes.position.array;
-  tris.flat().forEach((idx, k) => { arr[k*3] = p[idx].x; arr[k*3+1] = p[idx].y; arr[k*3+2] = p[idx].z; });
+  let p = w.map(l => new THREE.Vector3((mirror ? -l.x : l.x) * SCALE, -l.y * SCALE, -l.z * SCALE));
+  // light smoothing to steady the glove
+  if (h.smooth) p.forEach((v, i) => v.lerp(h.smooth[i], .45));
+  h.smooth = p.map(v => v.clone());
+  // centre on the palm so the glove always stays in frame
+  const c = [0, 5, 9, 13, 17].reduce((s, i) => s.add(p[i]), V()).multiplyScalar(1 / 5);
+  p = p.map(v => v.clone().sub(c).add(tmp.set(offsetX, 0, 0)));
+
+  for (let i = 1; i < 21; i++) h.joints[i].position.copy(p[i]);
+  FINGER_BONES.forEach(([a, b], i) => placeCyl(h.bones[i], p[a], p[b]));
+
+  const nrm = V().subVectors(p[5], p[0]).cross(V().subVectors(p[17], p[0])).normalize().multiplyScalar(.14);
+  const arr = h.palm.geometry.attributes.position.array, n = RING.length;
+  const centre = RING.reduce((s, i) => s.add(p[i]), V()).multiplyScalar(1 / n);
+  const put = (slot, v) => { arr[slot * 3] = v.x; arr[slot * 3 + 1] = v.y; arr[slot * 3 + 2] = v.z; };
+  RING.forEach((j, k) => { put(k, V().copy(p[j]).add(nrm)); put(n + 1 + k, V().copy(p[j]).sub(nrm)); });
+  put(n, V().copy(centre).add(nrm)); put(2 * n + 1, V().copy(centre).sub(nrm));
   h.palm.geometry.attributes.position.needsUpdate = true;
   h.palm.geometry.computeVertexNormals();
+  h.palm.geometry.computeBoundingSphere();
+
+  const back = V().subVectors(p[0], p[9]).normalize(); // forearm direction
+  placeCyl(h.cuff, V().copy(p[0]).addScaledVector(back, -.05), V().copy(p[0]).addScaledVector(back, 1.25));
+  h.cuff.scale.x = h.cuff.scale.z = 1;
+  placeCyl(h.band, V().copy(p[0]).addScaledVector(back, .05), V().copy(p[0]).addScaledVector(back, .2));
   h.g.visible = true;
 }
 function resize() {
   const r = host.getBoundingClientRect();
   renderer.setSize(r.width, r.height, false);
   camera.aspect = r.width / r.height; camera.updateProjectionMatrix();
-  $("overlay").width = r.width; $("overlay").height = r.height;
+  const pr = $("pip").getBoundingClientRect();
+  $("overlay").width = pr.width; $("overlay").height = pr.height;
 }
-new ResizeObserver(resize).observe(host);
+const ro = new ResizeObserver(resize); ro.observe(host); ro.observe($("pip"));
+function fitCamera(count) { // pull back so one or two gloves always fit
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const needW = count > 1 ? 8 : 4.2, needH = 5;
+  const d = Math.max(needH / (2 * t), needW / (2 * t * camera.aspect));
+  camera.position.z += (d - camera.position.z) * .1;
+  camera.lookAt(0, -.2, 0);
+}
 
-let show3D = true;
-$("view").onclick = () => { show3D = !show3D; host.style.display = show3D ? "" : "none"; $("video").style.opacity = show3D ? .35 : 1; };
+const PIP = ["small", "big", "off"]; let pipMode = 0;
+$("view").onclick = () => {
+  pipMode = (pipMode + 1) % 3;
+  $("pip").classList.toggle("big", PIP[pipMode] === "big");
+  $("pip").style.display = PIP[pipMode] === "off" ? "none" : "";
+  host.style.visibility = PIP[pipMode] === "big" ? "hidden" : "";
+  $("view").textContent = "Camera: " + PIP[pipMode];
+};
 
 // ---------- Camera + tracking ----------
 let landmarker, stream, facing = "user", running = false;
@@ -231,7 +289,10 @@ function loop(now) {
     }));
     drawOverlay();
     hands.forEach(h => h.g.visible = false);
-    latest.forEach((h, i) => poseHand(hands[i], h.world, ((mirror ? 1 - h.img[0].x : h.img[0].x) - .5) * 3));
+    const sx = h => mirror ? 1 - h.img[0].x : h.img[0].x;
+    [...latest].sort((a, b) => sx(a) - sx(b)).forEach((h, i, all) => poseHand(hands[i], h.world, all.length > 1 ? (i ? 2 : -2) : 0));
+    hands.forEach(h => { if (!h.g.visible) h.smooth = null; });
+    $("noHand").style.display = latest.length ? "none" : "";
     // signal from the most confident / first hand
     const g = latest.length ? classify(latest[0].world, latest[0].img) : null;
     if (stabilise(g, now) || (!g && active && now - candSince > HOLD_MS)) {
@@ -248,13 +309,13 @@ function loop(now) {
       p.hands = latest.map(h => ({ side: h.side, w: h.world.flatMap(l => [l.x, l.y, l.z]) }));
     }
   }
+  fitCamera(latest.length);
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
 function drawOverlay() {
   const c = $("overlay"), x = c.getContext("2d");
   x.clearRect(0, 0, c.width, c.height);
-  if (show3D) return;
   x.lineWidth = 3; x.strokeStyle = "#ffb400"; x.fillStyle = "#fff";
   for (const h of latest) {
     const P = h.img.map(l => [l.x * c.width, l.y * c.height]);
