@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Toolbar panel definition. Built into the package by the MSFS SDK Project Editor (InGamePanels asset group). -->
+<SimBase.Document Type="InGamePanels" version="1,0">
+  <Filename>hand-signals-panel.xml</Filename>
+  <InGamePanels.InGamePanelDefinition>
+    <PanelID>PANEL_HAND_SIGNALS</PanelID>
+    <Title>Hand Signals</Title>
+    <Url>html_ui/InGamePanels/HandSignalsPanel/HandSignalsPanel.html</Url>
+    <Type>Panel</Type>
+    <Icon>ICON_TOOLBAR_HAND_SIGNALS</Icon>
+  </InGamePanels.InGamePanelDefinition>
+</SimBase.Document>

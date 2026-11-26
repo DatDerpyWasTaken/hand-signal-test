@@ -1,0 +1,42 @@
+<!--
+  MSFS toolbar panel: shows your wingmen's hands and their current formation signal.
+  This file follows the layout of the MSFS SDK "InGamePanels" sample (CustomPanel).
+  If your SDK version's sample wrapper differs, keep the sample's <ingame-ui> wrapper and
+  header lines, and paste in the HAND-SIGNALS block and the two scripts at the bottom.
+-->
+<link rel="stylesheet" href="/SCSS/common.css" />
+<script type="text/html" import-script="/JS/common.js"></script>
+<script type="text/html" import-script="/JS/dataStorage.js"></script>
+<script type="text/html" import-script="/Templates/NewPushButton/NewPushButton.js"></script>
+<script type="text/html" import-script="/Pages/VCockpit/Instruments/Shared/BaseInstrument.js"></script>
+
+<ingame-ui id="HandSignalsPanel" panel-id="PANEL_HAND_SIGNALS" title="Hand Signals"
+           class="ingameUiFrame panelInvisible" content-fit="true" min-width="30" min-height="25">
+  <!-- HAND-SIGNALS block -->
+  <div id="hsRoot" style="display:flex;flex-direction:column;width:100%;height:100%;background:#0e1116;color:#e8edf2;font-family:sans-serif">
+    <div style="display:flex;gap:4px;padding:6px">
+      <input id="hsUrl" value="ws://localhost:8080" style="flex:2;font-size:14px;padding:4px" />
+      <input id="hsRoom" value="FLIGHT1" style="flex:1;font-size:14px;padding:4px" />
+      <input id="hsMe" value="" placeholder="me" style="flex:1;font-size:14px;padding:4px" />
+      <div id="hsGo" style="background:#ffb400;color:#111;font-weight:bold;padding:6px 10px;cursor:pointer">Connect</div>
+    </div>
+    <div id="hsStatus" style="font-size:12px;color:#8a96a3;padding:0 6px">Not connected</div>
+    <canvas id="hsCanvas" style="flex:1;width:100%;min-height:200px"></canvas>
+  </div>
+</ingame-ui>
+
+<script type="text/javascript" src="/InGamePanels/HandSignalsPanel/viewer.js"></script>
+<script type="text/javascript">
+  (function () {
+    var get = function (id) { return document.getElementById(id); };
+    var store = function (k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) {} };
+    ["hsUrl", "hsRoom", "hsMe"].forEach(function (k) { var v = store(k); if (v) get(k).value = v; });
+    var viewer = null;
+    get("hsGo").addEventListener("click", function () {
+      ["hsUrl", "hsRoom", "hsMe"].forEach(function (k) { store(k, get(k).value); });
+      viewer = viewer || new HandViewer({ canvas: get("hsCanvas"), onStatus: function (t) { get("hsStatus").textContent = t; } });
+      viewer.myCallsign = get("hsMe").value.toUpperCase();
+      viewer.connect(get("hsUrl").value, get("hsRoom").value);
+    });
+  })();
+</script>

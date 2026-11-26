@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hand Tracker</title>
+<style>
+:root{--bg:#0e1116;--ink:#e8edf2;--dim:#8a96a3;--acc:#ffb400;--ok:#00a05a;--bad:#e6261f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,sans-serif}
+header{display:flex;gap:8px;align-items:center;padding:10px 12px;flex-wrap:wrap}
+h1{font-size:18px;margin:0 auto 0 0}
+button,input,select{font:inherit;min-height:44px;border-radius:8px;border:1px solid #2a323c;background:#161b22;color:var(--ink);padding:0 12px}
+button{background:var(--acc);color:#111;border:0;font-weight:700}
+button.sec{background:#161b22;color:var(--ink);border:1px solid #2a323c}
+#stage{position:relative;width:100%;aspect-ratio:3/4;max-height:70vh;background:#000;overflow:hidden}
+#stage>*{position:absolute;inset:0;width:100%;height:100%}
+video{object-fit:cover;opacity:.35;transform:scaleX(-1)}
+#overlay{transform:scaleX(-1)}
+#signal{position:absolute;inset:auto 0 12px 0;height:auto;text-align:center;font-size:clamp(24px,7vw,44px);font-weight:800;text-shadow:0 2px 8px #000;pointer-events:none}
+#status{padding:6px 12px;color:var(--dim);font-size:14px}
+details{padding:0 12px 12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+.row>*{flex:1 1 140px}
+textarea{width:100%;min-height:180px;font:13px/1.4 ui-monospace,monospace;background:#161b22;color:var(--ink);border:1px solid #2a323c;border-radius:8px;padding:8px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--bad);margin-right:6px}
+.dot.on{background:var(--ok)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Hand Tracker</h1>
+  <button id="start">Start camera</button>
+  <button id="flip" class="sec">Flip camera</button>
+  <button id="view" class="sec">3D / camera</button>
+</header>
+<div id="stage">
+  <video id="video" playsinline muted></video>
+  <canvas id="overlay"></canvas>
+  <div id="three"></div>
+  <div id="signal"></div>
+</div>
+<div id="status">Tap “Start camera”. First load downloads the tracking model (~8 MB).</div>
+
+<details open>
+  <summary>Formation link (send your hand to wingmen)</summary>
+  <div class="row">
+    <input id="url" placeholder="wss://your-relay-address">
+    <input id="callsign" placeholder="Callsign" value="LEAD">
+    <input id="room" placeholder="Flight / room" value="FLIGHT1">
+  </div>
+  <div class="row"><button id="connect" class="sec"><span id="dot" class="dot"></span>Connect</button></div>
+</details>
+<details>
+  <summary>Wingman preview (test on one phone, no relay needed)</summary>
+  <p style="color:var(--dim);font-size:14px;margin:6px 0">Shows your own hand the way a wingman's MSFS panel would draw it.</p>
+  <canvas id="preview" style="width:100%;height:260px;background:#000;border-radius:8px"></canvas>
+</details>
+<details>
+  <summary>Signal meanings (edit to match your flight's briefing)</summary>
+  <textarea id="map"></textarea>
+  <div class="row"><button id="saveMap" class="sec">Save meanings</button></div>
+</details>
+
+<script src="viewer.js"></script>
+<script type="module">
+import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+
+const $ = id => document.getElementById(id);
+const status = t => $("status").textContent = t;
+
+// ---------- Hand skeleton ----------
+const CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
+
+// ---------- Signal meanings ----------
+const DEFAULT_MAP = {
+  OPEN_PALM: "HOLD / STANDBY",
+  FIST: "SPEEDBRAKES",
+  THUMBS_UP: "READY / AFFIRM",
+  THUMBS_DOWN: "NEGATIVE / PROBLEM",
+  ONE: "1", TWO: "2", THREE: "3", FOUR: "4",
+  THUMB_PINKY: "REJOIN"
+};
+let MAP = DEFAULT_MAP;
+try { MAP = { ...DEFAULT_MAP, ...JSON.parse(localStorage.getItem("signalMap") || "{}") }; } catch {}
+$("map").value = JSON.stringify(MAP, null, 2);
+$("saveMap").onclick = () => {
+  try { MAP = JSON.parse($("map").value); localStorage.setItem("signalMap", JSON.stringify(MAP)); status("Meanings saved."); }
+  catch { status("That isn't valid JSON — check commas and quotes."); }
+};
+try { for (const k of ["url","callsign","room"]) { const v = localStorage.getItem(k); if (v) $(k).value = v; } } catch {}
+if (!$("url").value && location.protocol.startsWith("http"))
+  $("url").value = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
+
+// ---------- Gesture classification ----------
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+function classify(w, img) {
+  // w = world landmarks (metres, rotation-independent distances), img = image landmarks
+  const ext = (tip, pip) => dist(w[0], w[tip]) > dist(w[0], w[pip]) * 1.15;
+  const f = [ext(8,6), ext(12,10), ext(16,14), ext(20,18)];
+  const palm = dist(w[0], w[9]);
+  const thumb = dist(w[4], w[5]) > palm * 0.5 && dist(w[0], w[4]) > dist(w[0], w[3]);
+  const n = f.filter(Boolean).length;
+  if (thumb && n === 4) return "OPEN_PALM";
+  if (!thumb && n === 0) return "FIST";
+  if (thumb && n === 0) {
+    const dy = img[4].y - img[2].y, span = dist(img[0], img[9]);
+    if (dy < -0.5 * span) return "THUMBS_UP";
+    if (dy > 0.5 * span) return "THUMBS_DOWN";
+    return null;
+  }
+  if (thumb && f[3] && !f[0] && !f[1] && !f[2]) return "THUMB_PINKY";
+  if (!thumb) {
+    if (f[0] && !f[1] && !f[2] && !f[3]) return "ONE";
+    if (f[0] && f[1] && !f[2] && !f[3]) return "TWO";
+    if (f[0] && f[1] && f[2] && !f[3]) return "THREE";
+    if (n === 4) return "FOUR";
+  }
+  return null;
+}
+// Debounce: a gesture must hold for HOLD_MS before it becomes the active signal
+const HOLD_MS = 350;
+let cand = null, candSince = 0, active = null;
+function stabilise(g, now) {
+  if (g !== cand) { cand = g; candSince = now; }
+  else if (now - candSince > HOLD_MS && active !== g) { active = g; return true; }
+  return false;
+}
+
+// ---------- 3D virtual hand ----------
+const host = $("three");
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+host.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 100);
+camera.position.set(0, 0, 4.5);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(1, 2, 3); scene.add(sun);
+
+function makeHand(color) {
+  const g = new THREE.Group();
+  const skin = new THREE.MeshStandardMaterial({ color, roughness: .55 });
+  const joints = [...Array(21)].map((_, i) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(i === 0 ? .09 : .055, 16, 12), skin);
+    g.add(m); return m;
+  });
+  const bones = CONN.map(() => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, 1, 12), skin);
+    g.add(m); return m;
+  });
+  // palm fill
+  const palmGeo = new THREE.BufferGeometry();
+  palmGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(5 * 3 * 3), 3));
+  const palm = new THREE.Mesh(palmGeo, new THREE.MeshStandardMaterial({ color, roughness: .6, side: THREE.DoubleSide }));
+  g.add(palm);
+  g.visible = false; scene.add(g);
+  return { g, joints, bones, palm };
+}
+const hands = [makeHand(0xf1c27d), makeHand(0xc68642)];
+const UP = new THREE.Vector3(0, 1, 0), tmp = new THREE.Vector3();
+const SCALE = 14;
+let mirror = true;
+function poseHand(h, w, offsetX) {
+  const p = w.map(l => new THREE.Vector3((mirror ? -l.x : l.x) * SCALE + offsetX, -l.y * SCALE, -l.z * SCALE));
+  p.forEach((v, i) => h.joints[i].position.copy(v));
+  CONN.forEach(([a, b], i) => {
+    const m = h.bones[i];
+    tmp.subVectors(p[b], p[a]);
+    m.position.copy(p[a]).addScaledVector(tmp, .5);
+    m.scale.set(1, tmp.length(), 1);
+    m.quaternion.setFromUnitVectors(UP, tmp.normalize());
+  });
+  const tris = [[0,1,5],[0,5,9],[0,9,13],[0,13,17],[1,2,5]];
+  const arr = h.palm.geometry.attributes.position.array;
+  tris.flat().forEach((idx, k) => { arr[k*3] = p[idx].x; arr[k*3+1] = p[idx].y; arr[k*3+2] = p[idx].z; });
+  h.palm.geometry.attributes.position.needsUpdate = true;
+  h.palm.geometry.computeVertexNormals();
+  h.g.visible = true;
+}
+function resize() {
+  const r = host.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / r.height; camera.updateProjectionMatrix();
+  $("overlay").width = r.width; $("overlay").height = r.height;
+}
+new ResizeObserver(resize).observe(host);
+
+let show3D = true;
+$("view").onclick = () => { show3D = !show3D; host.style.display = show3D ? "" : "none"; $("video").style.opacity = show3D ? .35 : 1; };
+
+// ---------- Camera + tracking ----------
+let landmarker, stream, facing = "user", running = false;
+async function loadModel() {
+  status("Loading tracking model…");
+  const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  const opts = d => ({ baseOptions: { modelAssetPath:
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate: d },
+    runningMode: "VIDEO", numHands: 2, minHandDetectionConfidence: .6, minTrackingConfidence: .5 });
+  try { landmarker = await HandLandmarker.createFromOptions(vision, opts("GPU")); }
+  catch { landmarker = await HandLandmarker.createFromOptions(vision, opts("CPU")); }
+}
+async function startCamera() {
+  if (!window.isSecureContext) { status("Camera needs HTTPS (or localhost). See README → 'Run it on your phone'."); return; }
+  try {
+    if (!landmarker) await loadModel();
+    stream?.getTracks().forEach(t => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    const v = $("video"); v.srcObject = stream; await v.play();
+    mirror = facing === "user";
+    v.style.transform = $("overlay").style.transform = mirror ? "scaleX(-1)" : "none";
+    status("Tracking. Hold a signal steady for a moment.");
+    if (!running) { running = true; requestAnimationFrame(loop); }
+  } catch (e) { status("Couldn't start camera: " + e.message); }
+}
+$("start").onclick = startCamera;
+$("flip").onclick = () => { facing = facing === "user" ? "environment" : "user"; if (stream) startCamera(); };
+
+let lastVideoTime = -1, lastSend = 0, latest = [];
+const preview = window.HandViewer ? new HandViewer({ canvas: $("preview") }) : null;
+function loop(now) {
+  const v = $("video");
+  if (landmarker && v.readyState >= 2 && v.currentTime !== lastVideoTime) {
+    lastVideoTime = v.currentTime;
+    const res = landmarker.detectForVideo(v, now);
+    latest = res.landmarks.map((img, i) => ({
+      img, world: res.worldLandmarks[i],
+      side: res.handedness[i]?.[0]?.categoryName || "?"
+    }));
+    drawOverlay();
+    hands.forEach(h => h.g.visible = false);
+    latest.forEach((h, i) => poseHand(hands[i], h.world, ((mirror ? 1 - h.img[0].x : h.img[0].x) - .5) * 3));
+    // signal from the most confident / first hand
+    const g = latest.length ? classify(latest[0].world, latest[0].img) : null;
+    if (stabilise(g, now) || (!g && active && now - candSince > HOLD_MS)) {
+      if (!g) active = null;
+      $("signal").textContent = active ? (MAP[active] ?? active) : "";
+      send(true);
+    }
+    if (now - lastSend > 66) send(false); // ~15 Hz pose stream
+    if (preview && $("preview").offsetParent) {
+      const p = preview.peers["YOU (preview)"] || (preview.peers["YOU (preview)"] = {});
+      const label = active ? (MAP[active] ?? active) : null;
+      if (label && label !== p.label) p.changed = Date.now();
+      p.label = label; p.t = Date.now();
+      p.hands = latest.map(h => ({ side: h.side, w: h.world.flatMap(l => [l.x, l.y, l.z]) }));
+    }
+  }
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+function drawOverlay() {
+  const c = $("overlay"), x = c.getContext("2d");
+  x.clearRect(0, 0, c.width, c.height);
+  if (show3D) return;
+  x.lineWidth = 3; x.strokeStyle = "#ffb400"; x.fillStyle = "#fff";
+  for (const h of latest) {
+    const P = h.img.map(l => [l.x * c.width, l.y * c.height]);
+    x.beginPath(); for (const [a, b] of CONN) { x.moveTo(...P[a]); x.lineTo(...P[b]); } x.stroke();
+    for (const p of P) { x.beginPath(); x.arc(p[0], p[1], 4, 0, 7); x.fill(); }
+  }
+}
+
+// ---------- Relay link ----------
+let ws = null;
+const r3 = n => Math.round(n * 1e4) / 1e4;
+function send(force) {
+  if (!ws || ws.readyState !== 1) return;
+  lastSend = performance.now();
+  ws.send(JSON.stringify({
+    type: "hand", callsign: $("callsign").value || "?", force,
+    signal: active, label: active ? (MAP[active] ?? active) : null,
+    hands: latest.map(h => ({ side: h.side, w: h.world.flatMap(l => [r3(l.x), r3(l.y), r3(l.z)]) }))
+  }));
+}
+$("connect").onclick = () => {
+  if (ws) { ws.close(); return; }
+  const url = $("url").value.trim(), room = $("room").value.trim() || "FLIGHT1";
+  try { localStorage.setItem("url", url); localStorage.setItem("callsign", $("callsign").value); localStorage.setItem("room", room); } catch {}
+  try { ws = new WebSocket(url.replace(/\/$/, "") + "/ws?room=" + encodeURIComponent(room)); }
+  catch (e) { status("Bad relay address: " + e.message); ws = null; return; }
+  ws.onopen = () => { $("dot").classList.add("on"); status("Connected to " + room + " as " + $("callsign").value); };
+  ws.onclose = () => { $("dot").classList.remove("on"); ws = null; status("Disconnected from relay."); };
+  ws.onerror = () => status("Relay connection failed. Check the address (wss:// when the page is on https://).");
+};
+</script>
+</body>
+</html>

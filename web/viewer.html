@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wingman Signals</title>
+<style>
+body{margin:0;background:#0e1116;color:#e8edf2;font:15px/1.4 system-ui,sans-serif;display:flex;flex-direction:column;height:100vh}
+form{display:flex;gap:6px;padding:8px;flex-wrap:wrap}
+input,button{font:inherit;min-height:40px;border-radius:8px;border:1px solid #2a323c;background:#161b22;color:inherit;padding:0 10px;flex:1 1 120px}
+button{background:#ffb400;color:#111;border:0;font-weight:700;flex:0 0 auto}
+canvas{flex:1;width:100%;min-height:0}
+#st{padding:0 8px 6px;color:#8a96a3;font-size:13px}
+</style>
+</head>
+<body>
+<form id="f">
+  <input id="url" placeholder="ws://localhost:8080">
+  <input id="room" placeholder="Room" value="FLIGHT1">
+  <input id="me" placeholder="My callsign (hidden)">
+  <button>Connect</button>
+</form>
+<div id="st">Not connected</div>
+<canvas id="c"></canvas>
+<script src="viewer.js"></script>
+<script>
+{
+  const q = new URLSearchParams(location.search);
+  const url = document.getElementById("url"), room = document.getElementById("room"), me = document.getElementById("me");
+  url.value = q.get("url") || (location.protocol === "https:" ? "wss://" : "ws://") + (location.host || "localhost:8080");
+  if (q.get("room")) room.value = q.get("room");
+  if (q.get("me")) me.value = q.get("me");
+  let v;
+  const go = () => {
+    v = v || new HandViewer({ canvas: document.getElementById("c"), onStatus: t => document.getElementById("st").textContent = t });
+    v.myCallsign = me.value.toUpperCase();
+    v.connect(url.value.trim(), room.value.trim());
+  };
+  document.getElementById("f").onsubmit = e => { e.preventDefault(); go(); };
+  if (q.get("auto") === "1") go();
+}
+</script>
+</body>
+</html>
