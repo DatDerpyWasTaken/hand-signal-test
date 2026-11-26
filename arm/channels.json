@@ -1,0 +1,19 @@
+{
+  "_doc": "Arm animation channels. Each is an L:var 0-100 that drives one keyframed animation (frame 0 = min deg, frame 100 = max deg). bridge.py and blender/build_arm.py both read this file, so keep them in step.",
+  "channels": [
+    {"id": "sh_yaw",     "min": -180, "max": 180},
+    {"id": "sh_pitch",   "min": 0,    "max": 180},
+    {"id": "sh_roll",    "min": -180, "max": 180},
+    {"id": "elbow",      "min": 0,    "max": 150},
+    {"id": "fore_roll",  "min": -180, "max": 180},
+    {"id": "wr_pitch",   "min": -90,  "max": 90},
+    {"id": "wr_yaw",     "min": -60,  "max": 60},
+    {"id": "curl_thumb", "min": 0,    "max": 70},
+    {"id": "thumb_opp",  "min": 0,    "max": 80},
+    {"id": "curl_index", "min": 0,    "max": 95},
+    {"id": "curl_middle","min": 0,    "max": 95},
+    {"id": "curl_ring",  "min": 0,    "max": 95},
+    {"id": "curl_pinky", "min": 0,    "max": 95},
+    {"id": "spread",     "min": 0,    "max": 25}
+  ]
+}

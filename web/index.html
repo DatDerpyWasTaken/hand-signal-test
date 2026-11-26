@@ -320,7 +320,8 @@ function send(force) {
   ws.send(JSON.stringify({
     type: "hand", callsign: $("callsign").value || "?", force,
     signal: active, label: activeLabel,
-    hands: latest.map(h => ({ side: h.side, w: h.world.flatMap(l => [r3(l.x), r3(l.y), r3(l.z)]) }))
+    hands: latest.map(h => ({ side: h.side, w: h.world.flatMap(l => [r3(l.x), r3(l.y), r3(l.z)]),
+      p: [r3(h.img[0].x), r3(h.img[0].y), r3(Math.hypot(h.img[0].x - h.img[9].x, h.img[0].y - h.img[9].y))] }))
   }));
 }
 $("connect").onclick = () => {

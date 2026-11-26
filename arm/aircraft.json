@@ -1,0 +1,38 @@
+{
+  "_doc": "Per-aircraft arm setup. Lengths in metres. Cockpit axes: x = right, y = up, z = forward. 'signal_box' is where your tracked hand is placed, relative to the shoulder. 'shoulder_offset' is the shoulder relative to the aircraft's position reference point (used to place wingmen's arms). All values marked TUNE are first guesses: adjust them in the sim.",
+  "hawk_t2": {
+    "title_contains": "Hawk",
+    "side": "left",
+    "upper_arm": 0.3,
+    "forearm": 0.27,
+    "signal_box": {
+      "center": [
+        0.12,
+        0.32,
+        0.3
+      ],
+      "size": [
+        0.45,
+        0.4,
+        0.25
+      ]
+    },
+    "elbow_pole": [
+      -1.0,
+      -0.6,
+      -0.3
+    ],
+    "shoulder_offset": [
+      -0.24,
+      0.85,
+      3.3
+    ],
+    "_TUNE": "shoulder_offset (front seat), signal_box",
+    "attitude_signs": {
+      "pitch": -1,
+      "bank": -1
+    },
+    "swap_handedness": true,
+    "size_ref": 0.12
+  }
+}

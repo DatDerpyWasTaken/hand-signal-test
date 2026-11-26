@@ -78,6 +78,10 @@ Relay address for the panel: use `ws://localhost:8080` if the relay runs on your
 
 The panel was written for the MSFS 2020 SDK sample layout and hasn't been tested inside the sim. MSFS 2024 uses the same HTML toolbar-panel system, but check the wrapper against your SDK's sample.
 
+## 5. Arm in the cockpit (MSFS 2024)
+
+Your tracked hand can drive a gloved arm, posed by inverse kinematics (IK), inside your aircraft. It can be seen from the external view, and every pilot running the bridge also sees their wingmen's arms. Setup is in [`arm/README.md`](arm/README.md).
+
 ## Tuning
 
 - Signals not detected: lower the `1.15` finger-extension threshold in `classify()`, or improve the lighting.
