@@ -13,7 +13,8 @@ Your phone's camera tracks your hand, a 3D virtual hand copies it live, and the 
 
 | Folder | What it is |
 |---|---|
-| `web/index.html` | The tracker. Uses the camera and MediaPipe Hand Landmarker (21 points per hand, up to 2 hands), shows a 3D hand (three.js) and recognises signals. |
+| `web/index.html` | The tracker. Uses the camera and MediaPipe Hand Landmarker (21 points per hand, up to 2 hands) and shows a 3D flight glove (three.js). |
+| `web/signals.js` | The signal engine, based on AFPAM 11-205. |
 | `web/viewer.html` + `viewer.js` | The wingman view. Draws everyone else's hand and their current signal. |
 | `relay/server.js` | A small server with no dependencies. It serves the web app and passes hand data between pilots in the same "room" (flight). |
 | `msfs-panel/` | Files for the MSFS toolbar panel (it reuses `viewer.js`). |
@@ -44,20 +45,20 @@ If you only want to test tracking without the relay, put the `web/` folder on an
 
 Tips: prop the phone up facing you, light your hand from the front, and keep it 30–60 cm from the lens. **Flip camera** switches to the back camera.
 
-## 3. Signals
+## 3. Signals (AFPAM 11-205)
 
-A signal counts once it has been held steady for about 0.35 s. The defaults are placeholders. Edit them under **Signal meanings** on the page so they match what your flight briefs:
+The engine is in `web/signals.js`. It reads the hand's **shape** in each frame and its **movement** over the last ~1.5 s, and it also recognises short **sequences**. The full list, with how to make each signal, is under **Signal reference** on the page.
 
-| Gesture | Key | Default meaning |
-|---|---|---|
-| Open palm | `OPEN_PALM` | HOLD / STANDBY |
-| Fist | `FIST` | SPEEDBRAKES |
-| Thumb up | `THUMBS_UP` | READY / AFFIRM |
-| Thumb down | `THUMBS_DOWN` | NEGATIVE / PROBLEM |
-| 1–4 fingers (thumb in) | `ONE`…`FOUR` | 1…4 (position / channel) |
-| Thumb + little finger | `THUMB_PINKY` | REJOIN |
+- **Moving signals:** gear up/down, I must land immediately, flaps up/down, speed brakes (biting motion), afterburner, jettison stores, descend/desire to land, loosen formation, pitchout/run-up (circling index finger), start engines (circling hand), radio transmitter/receiver failure, ejecting (both fists pulled down).
+- **Still signals:** oxygen check/OK sign, BDA check, echelon turn, lanyard check (hooked index finger), fuel check.
+- **Sequences:**
+  - System failure (HEFOE): hold a fist still, then show 1–5 fingers for Hydraulic, Electrical, Fuel, Oxygen or Engine.
+  - Change lead: jab a pointing finger forward, then show the new lead's position number.
+  - Numbers for fuel or frequency: fingers up = 1–5, sideways = 6–9, fist = 0. Drop your hand out of view between digits.
 
-To add a gesture, add a rule to `classify()` in `web/index.html` and a matching key to the meanings.
+Signals made with the aircraft (wing rocks/dips), the head (nods) or lights (all night signals) can't be seen by a hand camera, so they aren't detected.
+
+You can rename any label under **Rename signals** on the page. To tune the detection, the movement thresholds are in `motion()` and the hold time is in `still()`. You can test changes by feeding made-up landmark frames to `SignalEngine.update()` in Node.
 
 ## 4. Getting it into MSFS
 
@@ -85,5 +86,4 @@ The panel was written for the MSFS 2020 SDK sample layout and hasn't been tested
 
 ## Next steps worth doing
 - Swap the joint-and-bone hand for a rigged glTF hand model (drive its bones from the same landmarks).
-- Moving signals (e.g. circling, a pat on the head for a lead change) by tracking landmark paths over ~1 s.
 - An audio cue in the panel when a wingman's signal changes.

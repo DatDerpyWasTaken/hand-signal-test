@@ -61,13 +61,23 @@ textarea{width:100%;min-height:180px;font:13px/1.4 ui-monospace,monospace;backgr
   <p style="color:var(--dim);font-size:14px;margin:6px 0">Shows your own hand the way a wingman's MSFS panel would draw it.</p>
   <canvas id="preview" style="width:100%;height:260px;background:#000;border-radius:8px"></canvas>
 </details>
+<details open>
+  <summary>Recent signals</summary>
+  <ol id="log" style="margin:6px 0;padding-left:22px;color:var(--dim)"></ol>
+</details>
 <details>
-  <summary>Signal meanings (edit to match your flight's briefing)</summary>
+  <summary>Signal reference (AFPAM 11-205)</summary>
+  <table id="ref" style="width:100%;border-collapse:collapse;font-size:14px;margin-top:6px"></table>
+  <p style="color:var(--dim);font-size:13px">Not detectable with a hand camera: <span id="notdet"></span>.</p>
+</details>
+<details>
+  <summary>Rename signals (labels shown to wingmen)</summary>
   <textarea id="map"></textarea>
   <div class="row"><button id="saveMap" class="sec">Save meanings</button></div>
 </details>
 
 <script src="viewer.js"></script>
+<script src="signals.js"></script>
 <script type="module">
 import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
@@ -79,59 +89,39 @@ const status = t => $("status").textContent = t;
 const CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
   [9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 
-// ---------- Signal meanings ----------
-const DEFAULT_MAP = {
-  OPEN_PALM: "HOLD / STANDBY",
-  FIST: "SPEEDBRAKES",
-  THUMBS_UP: "READY / AFFIRM",
-  THUMBS_DOWN: "NEGATIVE / PROBLEM",
-  ONE: "1", TWO: "2", THREE: "3", FOUR: "4",
-  THUMB_PINKY: "REJOIN"
-};
+// ---------- Signals (engine in signals.js) ----------
+const SIG = SignalEngine.SIGNALS;
+const DEFAULT_MAP = Object.fromEntries(Object.entries(SIG).map(([k, v]) => [k, v[0]]));
 let MAP = DEFAULT_MAP;
-try { MAP = { ...DEFAULT_MAP, ...JSON.parse(localStorage.getItem("signalMap") || "{}") }; } catch {}
+try { MAP = { ...DEFAULT_MAP, ...JSON.parse(localStorage.getItem("signalMap2") || "{}") }; } catch {}
+const applyMap = () => { for (const k in SIG) if (MAP[k]) SIG[k][0] = String(MAP[k]); };
+applyMap();
 $("map").value = JSON.stringify(MAP, null, 2);
 $("saveMap").onclick = () => {
-  try { MAP = JSON.parse($("map").value); localStorage.setItem("signalMap", JSON.stringify(MAP)); status("Meanings saved."); }
+  try { MAP = { ...DEFAULT_MAP, ...JSON.parse($("map").value) }; applyMap(); localStorage.setItem("signalMap2", JSON.stringify(MAP)); status("Labels saved."); renderRef(); }
   catch { status("That isn't valid JSON — check commas and quotes."); }
 };
+const esc = t => String(t).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function renderRef() {
+  $("ref").innerHTML = Object.values(SIG).map(([label, how]) =>
+    `<tr><td style="padding:6px 8px 6px 0;font-weight:700;vertical-align:top;border-top:1px solid #2a323c">${esc(label)}</td><td style="padding:6px 0;color:var(--dim);border-top:1px solid #2a323c">${esc(how)}</td></tr>`).join("");
+}
+renderRef();
+$("notdet").textContent = SignalEngine.NOT_DETECTABLE.join("; ");
 try { for (const k of ["url","callsign","room"]) { const v = localStorage.getItem(k); if (v) $(k).value = v; } } catch {}
 if (!$("url").value && location.protocol.startsWith("http"))
   $("url").value = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
 
-// ---------- Gesture classification ----------
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-function classify(w, img) {
-  // w = world landmarks (metres, rotation-independent distances), img = image landmarks
-  const ext = (tip, pip) => dist(w[0], w[tip]) > dist(w[0], w[pip]) * 1.15;
-  const f = [ext(8,6), ext(12,10), ext(16,14), ext(20,18)];
-  const palm = dist(w[0], w[9]);
-  const thumb = dist(w[4], w[5]) > palm * 0.5 && dist(w[0], w[4]) > dist(w[0], w[3]);
-  const n = f.filter(Boolean).length;
-  if (thumb && n === 4) return "OPEN_PALM";
-  if (!thumb && n === 0) return "FIST";
-  if (thumb && n === 0) {
-    const dy = img[4].y - img[2].y, span = dist(img[0], img[9]);
-    if (dy < -0.5 * span) return "THUMBS_UP";
-    if (dy > 0.5 * span) return "THUMBS_DOWN";
-    return null;
-  }
-  if (thumb && f[3] && !f[0] && !f[1] && !f[2]) return "THUMB_PINKY";
-  if (!thumb) {
-    if (f[0] && !f[1] && !f[2] && !f[3]) return "ONE";
-    if (f[0] && f[1] && !f[2] && !f[3]) return "TWO";
-    if (f[0] && f[1] && f[2] && !f[3]) return "THREE";
-    if (n === 4) return "FOUR";
-  }
-  return null;
-}
-// Debounce: a gesture must hold for HOLD_MS before it becomes the active signal
-const HOLD_MS = 350;
-let cand = null, candSince = 0, active = null;
-function stabilise(g, now) {
-  if (g !== cand) { cand = g; candSince = now; }
-  else if (now - candSince > HOLD_MS && active !== g) { active = g; return true; }
-  return false;
+const engine = new SignalEngine();
+let active = null, activeLabel = null, activeUntil = 0;
+function showSignal(ev, now) {
+  active = ev.key; activeLabel = ev.label; activeUntil = now + 3000;
+  $("signal").textContent = ev.label;
+  const li = document.createElement("li");
+  li.textContent = new Date().toLocaleTimeString().slice(0, 8) + "  " + ev.label;
+  $("log").prepend(li);
+  while ($("log").children.length > 8) $("log").lastChild.remove();
+  navigator.vibrate?.(40);
 }
 
 // ---------- 3D virtual hand: flight glove, in its own centred display ----------
@@ -293,17 +283,14 @@ function loop(now) {
     [...latest].sort((a, b) => sx(a) - sx(b)).forEach((h, i, all) => poseHand(hands[i], h.world, all.length > 1 ? (i ? 2 : -2) : 0));
     hands.forEach(h => { if (!h.g.visible) h.smooth = null; });
     $("noHand").style.display = latest.length ? "none" : "";
-    // signal from the most confident / first hand
-    const g = latest.length ? classify(latest[0].world, latest[0].img) : null;
-    if (stabilise(g, now) || (!g && active && now - candSince > HOLD_MS)) {
-      if (!g) active = null;
-      $("signal").textContent = active ? (MAP[active] ?? active) : "";
-      send(true);
-    }
+    // signals: shape + movement over time (primary hand = first detected)
+    const ev = engine.update(latest.map(h => ({ w: h.world, img: h.img })), now);
+    if (ev) { showSignal(ev, now); send(true); }
+    if (active && now > activeUntil) { active = activeLabel = null; $("signal").textContent = ""; send(true); }
     if (now - lastSend > 66) send(false); // ~15 Hz pose stream
     if (preview && $("preview").offsetParent) {
       const p = preview.peers["YOU (preview)"] || (preview.peers["YOU (preview)"] = {});
-      const label = active ? (MAP[active] ?? active) : null;
+      const label = activeLabel;
       if (label && label !== p.label) p.changed = Date.now();
       p.label = label; p.t = Date.now();
       p.hands = latest.map(h => ({ side: h.side, w: h.world.flatMap(l => [l.x, l.y, l.z]) }));
@@ -332,7 +319,7 @@ function send(force) {
   lastSend = performance.now();
   ws.send(JSON.stringify({
     type: "hand", callsign: $("callsign").value || "?", force,
-    signal: active, label: active ? (MAP[active] ?? active) : null,
+    signal: active, label: activeLabel,
     hands: latest.map(h => ({ side: h.side, w: h.world.flatMap(l => [r3(l.x), r3(l.y), r3(l.z)]) }))
   }));
 }
